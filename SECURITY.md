@@ -9,10 +9,11 @@ local control plane:
 
 - Keep the published port bound to `127.0.0.1`.
 - Use an authenticated access layer for remote access.
-- Do not treat `DSH_TRUSTED_HOSTS` as authentication.
-- Keep `DSH_ALLOW_REMOTE_ACCESS` disabled unless trusted hosts are protected by
-  authenticated HTTPS access. Enabling it grants those hosts access to every
-  dsh API, including configuration and credential operations.
+- Do not treat `DSH_TRUSTED_HOSTS` as authentication. It extends the `/api`
+  host/origin fence; dsh's launch-token browser session still gates every API
+  request, including from trusted hosts.
+- Protect the printed launch-token URL. Whoever holds it can mint browser
+  sessions for the authorities they can reach.
 - Do not mount the Docker socket, host root, or an entire home directory.
 - Do not attach untrusted containers to the service network.
 - Use narrowly scoped, revocable provider credentials.

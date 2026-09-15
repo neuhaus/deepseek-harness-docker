@@ -16,8 +16,6 @@ The project follows the upstream
 - Matches the host UID/GID on Linux to preserve workspace file ownership.
 - Supports additional trusted browser authorities through
   `DSH_TRUSTED_HOSTS`.
-- Optionally enables the complete Web UI through an authenticated remote
-  access layer.
 - Publishes the service on host loopback by default and includes health checks
   and automatic restart handling.
 
@@ -70,18 +68,15 @@ The main settings in `.env` are:
 | `DSH_HOST_PORT` | Host loopback port | `3080` |
 | `DSH_WORKSPACES` | Host directory mounted as the workspace root | `./workspaces` |
 | `DSH_TRUSTED_HOSTS` | Extra browser authorities accepted by dsh | empty |
-| `DSH_ALLOW_REMOTE_ACCESS` | Allow trusted hosts to use all dsh APIs | `0` |
 | `DSH_UID`, `DSH_GID` | Container user and group IDs | `1000` |
 | `DEEPSEEK_API_KEY` | Optional provider API key | empty |
 
 `DSH_TRUSTED_HOSTS` accepts comma-separated `host` or `host:port` values. Do
-not include schemes, paths, or wildcards. It only controls dsh's host/origin
-checks and is not an authentication mechanism.
-
-For a complete remote Web UI, set `DSH_ALLOW_REMOTE_ACCESS=1` together with at
-least one trusted host. This grants authenticated users full control of dsh,
-including settings and credentials. Only enable it behind an authenticated
-HTTPS access layer.
+not include schemes, paths, or wildcards. The entrypoint forwards the entries
+to dsh as `--trusted-host` flags, extending the loopback-only `/api`
+host/origin fence. The fence controls reachability only; dsh additionally
+requires its launch-token browser session (the URL dsh prints at startup)
+before any API request is served, including from trusted hosts.
 
 The service binds to `127.0.0.1` by default. To use it on a remote Docker host,
 forward the port over SSH:

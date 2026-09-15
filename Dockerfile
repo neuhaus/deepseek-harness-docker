@@ -3,7 +3,7 @@
 ARG NODE_IMAGE=node:24-bookworm-slim
 FROM ${NODE_IMAGE}
 
-ARG DSH_VERSION=0.1.1-rc.2
+ARG DSH_VERSION=0.1.6-alpha.1
 ARG PNPM_VERSION=11.7.0
 
 ENV DSH_HOME=/home/node/.dsh \
@@ -39,14 +39,6 @@ RUN set -eux; \
     npm cache clean --force; \
     apt-get purge -y --auto-remove g++ make python3; \
     rm -rf /var/lib/apt/lists/*
-
-COPY patches/enable-remote-access.mjs /tmp/enable-remote-access.mjs
-
-RUN set -eux; \
-    node /tmp/enable-remote-access.mjs \
-      "$(npm root --global)/@deepseek-ai/dsh" \
-      "${DSH_VERSION}"; \
-    rm /tmp/enable-remote-access.mjs
 
 # Keep identity-only arguments below the expensive dependency layer so a host
 # UID/GID change does not reinstall dsh and its native dependencies.
@@ -84,7 +76,7 @@ EXPOSE 13080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD ["dsh-healthcheck"]
 
-ARG IMAGE_VERSION=0.1.1-rc.2-r2
+ARG IMAGE_VERSION=0.1.6-alpha.1-r1
 
 LABEL org.opencontainers.image.title="dsh-docker" \
       org.opencontainers.image.description="Minimal, secure-by-default Docker deployment for DeepSeek Harness" \

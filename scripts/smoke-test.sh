@@ -3,12 +3,15 @@
 set -Eeuo pipefail
 
 image=${1:-dsh-docker:smoke}
-expected_version=${DSH_EXPECTED_VERSION:-0.1.1-rc.2}
+expected_version=${DSH_EXPECTED_VERSION:-0.1.6-alpha.1}
 container="dsh-docker-smoke-${RANDOM}-$$"
 volume="${container}-home"
 workspace_dir=$(mktemp -d)
 smoke_uid=${SMOKE_UID:-$(id -u)}
 smoke_gid=${SMOKE_GID:-$(id -g)}
+endpoint=''
+token=''
+loopback_cookie=''
 
 if (( smoke_uid == 0 || smoke_gid == 0 )); then
   smoke_uid=1000
@@ -39,55 +42,80 @@ finish() {
 }
 trap finish EXIT
 
+first_set_cookie() {
+  tr -d '\r' | grep -i '^set-cookie:' | head -n 1 | cut -d' ' -f2- | cut -d';' -f1
+}
+
+mint_cookie() {
+  local authority=$1
+  curl --silent --show-error --max-time 5 \
+    --dump-headers --output /dev/null \
+    --header "Host: $authority" \
+    "http://${endpoint}/?token=${token}" \
+    | first_set_cookie
+}
+
 wait_for_web() {
-  endpoint=''
   local web_html
-  for _ in $(seq 1 90); do
-    endpoint=$(docker port "$container" 13080/tcp 2>/dev/null | tail -n 1 || true)
-    if [[ -n "$endpoint" ]] && curl --fail --silent --max-time 2 "http://${endpoint}/" >/dev/null; then
-      sleep 3
-      [[ "$(docker inspect --format '{{.State.Running}}' "$container")" == true ]]
-      web_html=$(curl --fail --silent --max-time 2 "http://${endpoint}/")
-      grep -qi '<!doctype html' <<<"$web_html"
-      return 0
-    fi
+  for _ in $(seq 1 120); do
     if [[ "$(docker inspect --format '{{.State.Running}}' "$container")" != true ]]; then
       docker logs "$container" >&2
       return 1
     fi
-    sleep 1
+    endpoint=$(docker port "$container" 13080/tcp 2>/dev/null | tail -n 1 || true)
+    if [[ -z "$endpoint" ]]; then
+      sleep 1
+      continue
+    fi
+    token=$(docker logs "$container" 2>/dev/null \
+      | grep -oE '[?&]token=[A-Za-z0-9_-]+' | tail -n 1 | cut -d= -f2 || true)
+    if [[ -z "$token" ]]; then
+      sleep 1
+      continue
+    fi
+    loopback_cookie=$(curl --silent --show-error --max-time 2 \
+      --dump-headers --output /dev/null \
+      "http://${endpoint}/?token=${token}" | first_set_cookie || true)
+    if [[ -z "$loopback_cookie" ]]; then
+      sleep 1
+      continue
+    fi
+    web_html=$(curl --fail --silent --max-time 2 \
+      --header "Cookie: $loopback_cookie" \
+      "http://${endpoint}/" 2>/dev/null || true)
+    if grep -qi '<!doctype html' <<<"$web_html"; then
+      sleep 3
+      [[ "$(docker inspect --format '{{.State.Running}}' "$container")" == true ]]
+      return 0
+    fi
   done
   docker logs "$container" >&2
   return 1
 }
 
-call_api() {
-  local method=$1
-  local output=$2
-  local authority=${3:-}
-  local origin=${4:-}
+fetch_file() {
+  # $1 authority (empty for loopback), $2 origin, $3 cookie, $4 output, $5 path
+  local authority=${1:-}
+  local origin=${2:-}
+  local cookie=${3:-}
+  local output=$4
+  local path=$5
   local -a headers=()
-  local payload
-  payload=$(printf \
-    '{"type":"client-request","rpcId":"smoke-api","method":"%s","payload":{}}' \
-    "$method")
-
   if [[ -n "$authority" ]]; then
     headers+=(--header "Host: $authority")
   fi
   if [[ -n "$origin" ]]; then
     headers+=(--header "Origin: $origin")
   fi
-
+  if [[ -n "$cookie" ]]; then
+    headers+=(--header "Cookie: $cookie")
+  fi
   curl --silent --show-error --max-time 5 \
-    --request POST \
     --header 'Sec-Fetch-Site: same-origin' \
-    --header 'Content-Type: application/json' \
     "${headers[@]}" \
-    --data "$payload" \
+    --url "http://${endpoint}/api/file?path=${path}" \
     --output "$output" \
-    --write-out '%{http_code}' \
-    "http://${endpoint}/api/${method}"
+    --write-out '%{http_code}'
 }
 
 log "building $image"
@@ -143,9 +171,7 @@ runtime_gid=$(docker run --rm --entrypoint id "$image" -g)
 [[ "$runtime_uid" == "$smoke_uid" ]]
 [[ "$runtime_gid" == "$smoke_gid" ]]
 docker run --rm --entrypoint node "$image" -e \
-  "const p=require('/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/node-pty'); if (!p.spawn) process.exit(1)"
-docker run --rm --entrypoint sh "$image" -c \
-  "grep -Fq 'globalThis.__DSH_REMOTE_ACCESS__ === true' /usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-connection/lib/client.js"
+  "const p=require(require.resolve('node-pty',{paths:['/usr/local/lib/node_modules/@deepseek-ai/dsh']})); if (!p.spawn) process.exit(1)"
 
 log 'checking invalid trusted-host configuration'
 if docker run --rm \
@@ -158,18 +184,6 @@ if docker run --rm \
   --env 'DSH_TRUSTED_HOSTS=https://invalid.example' \
   "$image" web >/dev/null 2>&1; then
   log 'non-authority DSH_TRUSTED_HOSTS entry was unexpectedly accepted'
-  exit 1
-fi
-if docker run --rm \
-  --env 'DSH_ALLOW_REMOTE_ACCESS=yes' \
-  "$image" web >/dev/null 2>&1; then
-  log 'invalid DSH_ALLOW_REMOTE_ACCESS was unexpectedly accepted'
-  exit 1
-fi
-if docker run --rm \
-  --env 'DSH_ALLOW_REMOTE_ACCESS=1' \
-  "$image" web >/dev/null 2>&1; then
-  log 'remote access without trusted hosts was unexpectedly accepted'
   exit 1
 fi
 
@@ -191,102 +205,69 @@ docker run --detach \
 
 wait_for_web
 
-default_remote_html=$(curl --fail --silent --max-time 2 \
-  --header 'Host: smoke.example' \
-  --header 'Origin: http://smoke.example' \
-  "http://${endpoint}/")
-if grep -Fq 'globalThis.__DSH_REMOTE_ACCESS__=true' <<<"$default_remote_html"; then
-  log 'remote browser capability was exposed while remote access was disabled'
-  exit 1
-fi
-
 if docker logs "$container" 2>&1 | grep -q 'opening the default browser'; then
   log 'container unexpectedly attempted to open a browser'
   exit 1
 fi
 
 docker exec "$container" test -w /home/node/.dsh
-docker exec "$container" sh -c '
-  probe=/home/node/workspaces/.dsh-smoke-write
-  trap "rm -f $probe" EXIT
-  printf smoke >"$probe"
-  test "$(cat "$probe")" = smoke
-'
+probe_path=/home/node/workspaces/.dsh-smoke-probe
+docker exec "$container" sh -c "printf smoke >$probe_path"
 [[ "$(docker exec "$container" id -u)" != 0 ]]
 
-loopback_status=$(call_api host.listDirectory "$workspace_dir/loopback.json")
+trusted_cookie=$(mint_cookie smoke.example)
+[[ -n "$trusted_cookie" ]]
+trusted_alt_cookie=$(mint_cookie smoke-alt.example:8443)
+[[ -n "$trusted_alt_cookie" ]]
+
+log 'checking the API fence and browser authentication'
+unauthenticated_status=$(fetch_file '' '' '' "$workspace_dir/unauth.txt" "$probe_path")
+[[ "$unauthenticated_status" == 401 ]]
+
+loopback_status=$(fetch_file '' '' "$loopback_cookie" "$workspace_dir/loopback.txt" "$probe_path")
 [[ "$loopback_status" == 200 ]]
-grep -q '"ok":true' "$workspace_dir/loopback.json"
+grep -q smoke "$workspace_dir/loopback.txt"
 
-trusted_status=$(call_api \
-  host.listDirectory \
-  "$workspace_dir/trusted.json" \
+trusted_status=$(fetch_file \
   smoke.example \
-  http://smoke.example)
+  http://smoke.example \
+  "$trusted_cookie" \
+  "$workspace_dir/trusted.txt" \
+  "$probe_path")
 [[ "$trusted_status" == 200 ]]
-grep -q '"ok":true' "$workspace_dir/trusted.json"
+grep -q smoke "$workspace_dir/trusted.txt"
 
-second_trusted_status=$(call_api \
-  host.listDirectory \
-  "$workspace_dir/second-trusted.json" \
+second_trusted_status=$(fetch_file \
   smoke-alt.example:8443 \
-  https://smoke-alt.example:8443)
+  https://smoke-alt.example:8443 \
+  "$trusted_alt_cookie" \
+  "$workspace_dir/second-trusted.txt" \
+  "$probe_path")
 [[ "$second_trusted_status" == 200 ]]
-grep -q '"ok":true' "$workspace_dir/second-trusted.json"
+grep -q smoke "$workspace_dir/second-trusted.txt"
 
-untrusted_status=$(call_api \
-  host.listDirectory \
-  "$workspace_dir/untrusted.txt" \
+trusted_unauthenticated_status=$(fetch_file \
+  smoke.example \
+  http://smoke.example \
+  '' \
+  "$workspace_dir/trusted-unauth.txt" \
+  "$probe_path")
+[[ "$trusted_unauthenticated_status" == 401 ]]
+
+untrusted_status=$(fetch_file \
   untrusted.example \
-  https://untrusted.example)
+  https://untrusted.example \
+  '' \
+  "$workspace_dir/untrusted.txt" \
+  "$probe_path")
 [[ "$untrusted_status" == 403 ]]
 
-mismatched_origin_status=$(call_api \
-  host.listDirectory \
+mismatched_origin_status=$(fetch_file \
+  smoke.example \
+  https://untrusted.example \
+  "$trusted_cookie" \
   "$workspace_dir/mismatched-origin.txt" \
-  smoke.example \
-  https://untrusted.example)
+  "$probe_path")
 [[ "$mismatched_origin_status" == 403 ]]
-
-default_privileged_status=$(call_api \
-  settings.describe \
-  "$workspace_dir/default-privileged.txt" \
-  smoke.example \
-  http://smoke.example)
-[[ "$default_privileged_status" == 403 ]]
-
-log 'restarting with complete remote access enabled for trusted hosts'
-docker rm --force "$container" >/dev/null
-docker run --detach \
-  --name "$container" \
-  --env 'DSH_TRUSTED_HOSTS=smoke.example' \
-  --env 'DSH_ALLOW_REMOTE_ACCESS=1' \
-  --publish 127.0.0.1::13080 \
-  --volume "$volume:/home/node/.dsh" \
-  --volume "$workspace_dir:/home/node/workspaces" \
-  "$image" >/dev/null
-
-wait_for_web
-
-enabled_remote_html=$(curl --fail --silent --max-time 2 \
-  --header 'Host: smoke.example' \
-  --header 'Origin: http://smoke.example' \
-  "http://${endpoint}/")
-grep -Fq 'globalThis.__DSH_REMOTE_ACCESS__=true' <<<"$enabled_remote_html"
-
-remote_privileged_status=$(call_api \
-  settings.describe \
-  "$workspace_dir/remote-privileged.json" \
-  smoke.example \
-  http://smoke.example)
-[[ "$remote_privileged_status" == 200 ]]
-grep -q '"ok":true' "$workspace_dir/remote-privileged.json"
-
-remote_untrusted_status=$(call_api \
-  settings.describe \
-  "$workspace_dir/remote-untrusted.txt" \
-  untrusted.example \
-  https://untrusted.example)
-[[ "$remote_untrusted_status" == 403 ]]
 
 log "Web UI is healthy at http://${endpoint}/"
