@@ -41,6 +41,15 @@ append_trusted_hosts() {
   dsh_args+=(--trusted-host "${entries[@]}")
 }
 
+# Upstream adapters treat a set-but-empty provider variable as a value (an
+# empty base URL fails URL parsing) while an unset variable falls back to
+# built-in defaults. Normalize empties to unset.
+for variable in DEEPSEEK_API_KEY DEEPSEEK_BASE_URL DEEPSEEK_SEARCH_BASE_URL; do
+  if [[ -z "${!variable:-}" ]]; then
+    unset "$variable"
+  fi
+done
+
 mkdir -p \
   "${DSH_HOME:-/home/node/.dsh}" \
   "${NPM_CONFIG_CACHE:-/home/node/.dsh/cache/npm}" \
