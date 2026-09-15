@@ -30,6 +30,10 @@ The project follows the upstream
 cp .env.example .env
 ```
 
+The `.env` file is required: compose validates `DSH_HOST_PORT` at config
+time and refuses to start the container without it. The provider variables
+in the file remain optional.
+
 On Docker Desktop:
 
 ```sh

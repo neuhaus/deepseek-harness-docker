@@ -22,7 +22,7 @@ services:
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-}
       DEEPSEEK_SEARCH_BASE_URL: ${DEEPSEEK_SEARCH_BASE_URL:-}
     ports:
-      - "127.0.0.1:${DSH_HOST_PORT:-3080}:13080"
+      - "127.0.0.1:${DSH_HOST_PORT:?set DSH_HOST_PORT in .env (copy .env.example)}:13080"
     volumes:
       - dsh_home:/home/node/.dsh
       - type: bind
