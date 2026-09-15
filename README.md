@@ -40,12 +40,13 @@ On Docker Desktop:
 docker compose up --detach --build
 ```
 
-On Linux, pass your host identity so files created in a bind-mounted workspace
-remain accessible:
+On Linux, set `DSH_UID` and `DSH_GID` in `.env` to the output of `id -u`
+and `id -g`, so files created in the bind-mounted workspace remain
+accessible (the values in `.env.example` are only correct if they match):
 
 ```sh
-DSH_UID="$(id -u)" DSH_GID="$(id -g)" \
-  docker compose up --detach --build
+sed -i "s/^DSH_UID=.*/DSH_UID=$(id -u)/; s/^DSH_GID=.*/DSH_GID=$(id -g)/" .env
+docker compose up --detach --build
 ```
 
 Open <http://localhost:3080>, then select a workspace under
