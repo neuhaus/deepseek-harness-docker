@@ -90,6 +90,11 @@ done
 
 append_trusted_hosts
 
+workspace=/home/node/workspaces
+if [[ ! -w "$workspace" ]]; then
+  fail "workspace ${workspace} is not writable by uid $(id -u); rebuild with DSH_UID/DSH_GID matching the owner of the host directory (compare 'ls -ldn' on the host with the image's user)"
+fi
+
 web_port=${DSH_WEB_PORT:-3080}
 bridge_port=${DSH_BRIDGE_PORT:-13080}
 
