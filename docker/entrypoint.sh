@@ -50,8 +50,13 @@ for variable in DEEPSEEK_API_KEY DEEPSEEK_BASE_URL DEEPSEEK_SEARCH_BASE_URL; do
   fi
 done
 
+dsh_home=${DSH_HOME:-/home/node/.dsh}
+if [[ ! -w "$dsh_home" ]]; then
+  fail "state directory ${dsh_home} is not writable by uid $(id -u); the dsh_home volume was seeded by an image built with a different DSH_UID/DSH_GID - re-seed it (docker compose down && docker volume rm <project>_dsh_home, state is lost) or run 'docker compose run --rm --user root --entrypoint sh dsh -c \"chown -R $(id -u):$(id -g) ${dsh_home}\"'"
+fi
+
 mkdir -p \
-  "${DSH_HOME:-/home/node/.dsh}" \
+  "$dsh_home" \
   "${NPM_CONFIG_CACHE:-/home/node/.dsh/cache/npm}" \
   "${PNPM_HOME:-/home/node/.dsh/pnpm}" \
   "${XDG_CACHE_HOME:-/home/node/.dsh/cache}" \
