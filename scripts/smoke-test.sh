@@ -49,7 +49,7 @@ first_set_cookie() {
 mint_cookie() {
   local authority=$1
   curl --silent --show-error --max-time 5 \
-    --dump-headers --output /dev/null \
+    -D - --output /dev/null \
     --header "Host: $authority" \
     "http://${endpoint}/?token=${token}" \
     | first_set_cookie
@@ -74,7 +74,7 @@ wait_for_web() {
       continue
     fi
     loopback_cookie=$(curl --silent --show-error --max-time 2 \
-      --dump-headers --output /dev/null \
+      -D - --output /dev/null \
       "http://${endpoint}/?token=${token}" | first_set_cookie || true)
     if [[ -z "$loopback_cookie" ]]; then
       sleep 1
